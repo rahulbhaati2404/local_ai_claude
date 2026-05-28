@@ -46,7 +46,8 @@ class AgentNodeResponse(BaseModel):
     """
     Structured response schema for the autonomous modification matrix execution output.
     """
-    status: Literal["success", "failure"]
+    status: Literal["success", "failure","pending"]
     summary: str 
     modified_files: List[str] 
     execution_logs: str 
+    next_step: Optional[str] = None
