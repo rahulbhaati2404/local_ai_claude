@@ -1,0 +1,20 @@
+# Ignore the virtual environment folder
+venv311/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# IDE settings
+.vscode/
+.idea/
+
+# Local data and logs
+.env
+checkpoints.db
+*.log
+logs/
+.DS_Store
+
+# MCP and tool artifacts
+mcp_server.pid

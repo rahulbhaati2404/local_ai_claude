@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local AI Agent Engine</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Live streamed AI workflows</p>
+          <h1>Local AI Agent Engine</h1>
+          <p class="subtitle">
+            Two independent chat panels for PR review and code editing. Each request locks its own form while the
+            SSE stream is active, then unlocks when the final result arrives.
+          </p>
+        </div>
+        <div class="hero-card">
+          <div class="hero-stat">
+            <span>Backend</span>
+            <strong>FastAPI + SSE</strong>
+          </div>
+          <div class="hero-stat">
+            <span>Frontend</span>
+            <strong>Static browser app</strong>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel" id="pr-panel" data-key="prReview">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">API 01</p>
+              <h2>PR Review</h2>
+            </div>
+            <span class="status-pill" data-status>Idle</span>
+          </div>
+
+          <form class="form" id="pr-form">
+            <label>
+              <span>Pull request URL</span>
+              <input
+                id="pr-url"
+                type="url"
+                placeholder="https://github.com/org/repo/pull/123"
+                required
+              />
+            </label>
+            <button type="submit" class="primary-btn">Run PR Review</button>
+          </form>
+
+          <div class="chatbox" id="pr-chat" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" id="code-panel" data-key="codeEditor">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">API 02</p>
+              <h2>Code Editor</h2>
+            </div>
+            <span class="status-pill" data-status>Idle</span>
+          </div>
+
+          <form class="form" id="code-form">
+            <label>
+              <span>Workspace path</span>
+              <input id="workspace-path" type="text" placeholder="D:\\projects\\my-app" required />
+            </label>
+
+            <label>
+              <span>User prompt</span>
+              <textarea
+                id="user-prompt"
+                rows="4"
+                placeholder="Describe what you want the code assistant to do..."
+                required
+              ></textarea>
+            </label>
+
+            <label>
+              <span>File path</span>
+              <input id="file-path" type="text" placeholder="src/app/main.py" />
+            </label>
+
+            <label>
+              <span>Mode</span>
+              <select id="mode">
+                <option value="ask">ask</option>
+                <option value="agent">agent</option>
+                <option value="plan">plan</option>
+              </select>
+            </label>
+
+            <button type="submit" class="primary-btn">Run Code Editor</button>
+          </form>
+
+          <div class="chatbox" id="code-chat" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

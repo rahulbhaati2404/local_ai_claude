@@ -1,0 +1,49 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+loguru
+httpx
+transformers
+sentence-transformers
+torch
+numpy
+tenacity
+ollama
+langchain
+langchain-community
+langchain-text-splitters
+chromadb
+pypdf
+python-docx
+unstructured
+langsmith
+redis
+gunicorn
+pytest
+pytest-asyncio
+pydantic_settings
+pandas
+pyarrow
+fastapi
+pydantic
+ollama
+
+#py -3.11 -m venv venv311
+#.\venv311\Scripts\Activate.ps1
+#pip install -r requirements.txt
+#pip install ollama
+#python backend/test_ollama.py
+#$env:API_TARGET="http://127.0.0.1:9000"; node frontend\server.js
+#http://127.0.0.1:5173/   frontend
+#http://127.0.0.1:8000/  backend
+
+#stant backend-> python -m main
+#start frontend-> cd frontend && python -m http.server 5173
+#check http://127.0.0.1:5173  && http://127.0.0.1:8000
+
+
+#eg pr . https://github.com/python/peps/pull/3597
+#eg file workspace->D:\Visual_Studio_Code\local_ai_claude
+#eg. file path ->api/code_editor.py
