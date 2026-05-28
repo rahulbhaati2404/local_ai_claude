@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from core.logger import logger
 from models.ollama_client import ollama_client
@@ -28,29 +28,18 @@ MAX_AGENT_ITERATIONS = 50
 MAX_REPEAT_THRESHOLD = 10
 
 
-async def discover_tools() -> str:
+async def discover_tools(
+    session: ClientSession
+) -> str:
 
     try:
 
-        async with stdio_client(
-            MCP_SERVER_PARAMS
-        ) as (read_stream, write_stream):
+        discovered = await session.list_tools()
 
-            async with ClientSession(
-                read_stream,
-                write_stream
-            ) as session:
-
-                await session.initialize()
-
-                discovered = (
-                    await session.list_tools()
-                )
-
-                return "\n".join([
-                    f"- {t.name}: {t.description}"
-                    for t in discovered.tools
-                ])
+        return "\n".join([
+            f"- {t.name}: {t.description}"
+            for t in discovered.tools
+        ])
 
     except Exception:
 
@@ -96,7 +85,8 @@ def clean_json_response(
         "status": "failure",
         "summary": "",
         "modified_files": [],
-        "execution_logs": ""
+        "execution_logs": "",
+        "tool_calls": []
     }
 
     parsed = False
@@ -140,14 +130,100 @@ def clean_json_response(
     return final_data
 
 
+async def execute_tool_calls(
+    session: ClientSession,
+    tool_calls: List[Dict[str, Any]]
+) -> str:
+
+    logs = []
+
+    for tool_call in tool_calls:
+
+        try:
+
+            tool_name = tool_call.get("tool")
+            arguments = tool_call.get(
+                "arguments",
+                {}
+            )
+
+            logger.info(
+                f"[Agent Node] Calling tool: "
+                f"{tool_name}"
+            )
+
+            logger.info(
+                f"[Agent Node] Tool arguments: "
+                f"{arguments}"
+            )
+
+            result = await session.call_tool(
+                tool_name,
+                arguments=arguments
+            )
+
+            tool_output = ""
+
+            if hasattr(result, "content"):
+
+                tool_output = "\n".join([
+                    getattr(c, "text", str(c))
+                    for c in result.content
+                ])
+
+            else:
+                tool_output = str(result)
+
+            log_entry = f"""
+TOOL: {tool_name}
+
+ARGUMENTS:
+{json.dumps(arguments, indent=2)}
+
+RESULT:
+{tool_output}
+"""
+
+            logs.append(log_entry)
+
+            logger.info(
+                f"[Agent Node] Tool executed: "
+                f"{tool_name}"
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                f"[Agent Node] Tool execution failed: "
+                f"{tool_call}"
+            )
+
+            logs.append(
+                f"""
+TOOL ERROR:
+{tool_call}
+
+ERROR:
+{str(e)}
+"""
+            )
+
+    return "\n".join(logs)
+
+
 async def run_single_iteration(
     state: EditorState,
     tool_manifest: str,
+    session: ClientSession,
     iteration: int
 ) -> Dict[str, Any]:
 
     history = "\n".join(
         state.get("agent_history", [])
+    )
+
+    tool_results = "\n".join(
+        state.get("tool_results", [])
     )
 
     system_prompt = f"""
@@ -163,20 +239,41 @@ Rules:
 - do not fake file modifications
 - do not assume execution succeeded
 - use deterministic reasoning
+- use tools whenever needed
+- if more information is needed use tool_calls
 - if task is incomplete return status=pending
 - if task is complete return status=success
 - if task cannot continue return status=failure
 
-Return ONLY valid JSON.
+You may call tools using this schema:
 
-Schema:
+{{
+  "status": "pending",
+  "summary": "need file contents",
+  "modified_files": [],
+  "execution_logs": "",
+  "tool_calls": [
+    {{
+      "tool": "read_file",
+      "arguments": {{
+        "repository_path": "...",
+        "file_path": "..."
+      }}
+    }}
+  ]
+}}
+
+Final response schema:
 
 {{
   "status": "success" | "failure" | "pending",
   "summary": "execution overview",
   "modified_files": ["path/file.py"],
-  "execution_logs": "detailed logs"
+  "execution_logs": "detailed logs",
+  "tool_calls": []
 }}
+
+Return ONLY valid JSON.
 """
 
     user_prompt = f"""
@@ -194,6 +291,9 @@ CURRENT ITERATION:
 
 PREVIOUS EXECUTION HISTORY:
 {history}
+
+PREVIOUS TOOL RESULTS:
+{tool_results}
 """
 
     total_tokens = (
@@ -220,7 +320,44 @@ PREVIOUS EXECUTION HISTORY:
         token_counter.estimate_tokens(response)
     )
 
+    logger.info(
+        f"[Agent Node] Raw model response:\n{response}"
+    )
+
     cleaned = clean_json_response(response)
+
+    tool_calls = cleaned.get(
+        "tool_calls",
+        []
+    )
+
+    if tool_calls:
+
+        logger.info(
+            f"[Agent Node] Executing "
+            f"{len(tool_calls)} tool calls"
+        )
+
+        tool_logs = await execute_tool_calls(
+            session=session,
+            tool_calls=tool_calls
+        )
+
+        state.setdefault(
+            "tool_results",
+            []
+        )
+
+        state["tool_results"].append(
+            tool_logs
+        )
+
+        cleaned["execution_logs"] += (
+            f"\n\nTOOL EXECUTION LOGS:\n"
+            f"{tool_logs}"
+        )
+
+        cleaned["status"] = "pending"
 
     validated = (
         AgentNodeResponse
@@ -250,48 +387,80 @@ async def agent_node(
         )
 
         state.setdefault(
+            "tool_results",
+            []
+        )
+
+        state.setdefault(
             "iteration_count",
             0
         )
-
-        tool_manifest = await discover_tools()
-
-        previous_summary = ""
-        repeat_counter = 0
 
         final_response = {
             "status": "failure",
             "summary": "Agent execution failed",
             "modified_files": [],
-            "execution_logs": ""
+            "execution_logs": "",
+            "tool_calls": []
         }
 
-        for iteration in range(
-            1,
-            MAX_AGENT_ITERATIONS + 1
-        ):
+        async with stdio_client(
+            MCP_SERVER_PARAMS
+        ) as (read_stream, write_stream):
 
-            logger.info(
-                f"[Agent Node] Iteration {iteration}"
-            )
+            async with ClientSession(
+                read_stream,
+                write_stream
+            ) as session:
 
-            state["iteration_count"] = iteration
+                await session.initialize()
 
-            try:
-
-                response = await run_single_iteration(
-                    state=state,
-                    tool_manifest=tool_manifest,
-                    iteration=iteration
+                logger.info(
+                    "[Agent Node] MCP session initialized"
                 )
 
-                current_summary = (
-                    response.get("summary", "")
-                    .strip()
+                tool_manifest = await discover_tools(
+                    session
                 )
 
-                state["agent_history"].append(
-                    f"""
+                logger.info(
+                    f"[Agent Node] Available tools:\n"
+                    f"{tool_manifest}"
+                )
+
+                previous_summary = ""
+                repeat_counter = 0
+
+                for iteration in range(
+                    1,
+                    MAX_AGENT_ITERATIONS + 1
+                ):
+
+                    logger.info(
+                        f"[Agent Node] Iteration "
+                        f"{iteration}"
+                    )
+
+                    state["iteration_count"] = iteration
+
+                    try:
+
+                        response = (
+                            await run_single_iteration(
+                                state=state,
+                                tool_manifest=tool_manifest,
+                                session=session,
+                                iteration=iteration
+                            )
+                        )
+
+                        current_summary = (
+                            response.get("summary", "")
+                            .strip()
+                        )
+
+                        state["agent_history"].append(
+                            f"""
 Iteration: {iteration}
 
 Status:
@@ -303,119 +472,139 @@ Summary:
 Execution Logs:
 {response.get("execution_logs")}
 """
-                )
+                        )
 
-                logger.info(
-                    f"[Agent Node] Status: "
-                    f"{response.get('status')}"
-                )
+                        logger.info(
+                            f"[Agent Node] Status: "
+                            f"{response.get('status')}"
+                        )
 
-                # Detect repeated loops
-                if (
-                    current_summary
-                    and current_summary == previous_summary
-                ):
+                        if (
+                            current_summary
+                            and current_summary
+                            == previous_summary
+                        ):
 
-                    repeat_counter += 1
+                            repeat_counter += 1
 
-                    logger.warning(
-                        "[Agent Node] Repeated response "
-                        f"detected ({repeat_counter})"
-                    )
+                            logger.warning(
+                                "[Agent Node] Repeated "
+                                f"response detected "
+                                f"({repeat_counter})"
+                            )
+
+                        else:
+                            repeat_counter = 0
+
+                        previous_summary = current_summary
+
+                        if (
+                            repeat_counter
+                            >= MAX_REPEAT_THRESHOLD
+                        ):
+
+                            logger.error(
+                                "[Agent Node] Agent "
+                                "stuck in loop"
+                            )
+
+                            final_response = {
+                                "status": "failure",
+                                "summary": (
+                                    "Agent stuck in "
+                                    "repeated loop"
+                                ),
+                                "modified_files": [],
+                                "execution_logs": (
+                                    "Repeated responses "
+                                    "detected"
+                                ),
+                                "tool_calls": []
+                            }
+
+                            break
+
+                        status = response.get("status")
+
+                        final_response = response
+
+                        if status == "success":
+
+                            logger.info(
+                                "[Agent Node] "
+                                "Task completed"
+                            )
+
+                            break
+
+                        if status == "failure":
+
+                            logger.error(
+                                "[Agent Node] "
+                                "Task failed"
+                            )
+
+                            break
+
+                        if status == "pending":
+
+                            logger.info(
+                                "[Agent Node] "
+                                "Continuing execution..."
+                            )
+
+                            continue
+
+                        logger.warning(
+                            "[Agent Node] Unknown "
+                            "status received"
+                        )
+
+                        break
+
+                    except Exception:
+
+                        logger.exception(
+                            "[Agent Node] "
+                            "Iteration failed"
+                        )
+
+                        final_response = {
+                            "status": "failure",
+                            "summary": (
+                                f"Iteration {iteration} "
+                                "failed"
+                            ),
+                            "modified_files": [],
+                            "execution_logs": (
+                                "Internal agent "
+                                "execution error"
+                            ),
+                            "tool_calls": []
+                        }
+
+                        break
 
                 else:
-                    repeat_counter = 0
 
-                previous_summary = current_summary
-
-                if repeat_counter >= MAX_REPEAT_THRESHOLD:
-
-                    logger.error(
-                        "[Agent Node] Agent stuck in loop"
+                    logger.warning(
+                        "[Agent Node] Max "
+                        "iterations reached"
                     )
 
                     final_response = {
                         "status": "failure",
                         "summary": (
-                            "Agent stuck in repeated loop"
+                            "Max agent iterations "
+                            "reached"
                         ),
                         "modified_files": [],
                         "execution_logs": (
-                            "Repeated responses detected"
-                        )
+                            "Agent could not "
+                            "complete task"
+                        ),
+                        "tool_calls": []
                     }
-
-                    break
-
-                status = response.get("status")
-
-                final_response = response
-
-                if status == "success":
-
-                    logger.info(
-                        "[Agent Node] Task completed"
-                    )
-
-                    break
-
-                if status == "failure":
-
-                    logger.error(
-                        "[Agent Node] Task failed"
-                    )
-
-                    break
-
-                if status == "pending":
-
-                    logger.info(
-                        "[Agent Node] Continuing execution..."
-                    )
-
-                    continue
-
-                logger.warning(
-                    "[Agent Node] Unknown status received"
-                )
-
-                break
-
-            except Exception:
-
-                logger.exception(
-                    "[Agent Node] Iteration failed"
-                )
-
-                final_response = {
-                    "status": "failure",
-                    "summary": (
-                        f"Iteration {iteration} failed"
-                    ),
-                    "modified_files": [],
-                    "execution_logs": (
-                        "Internal agent execution error"
-                    )
-                }
-
-                break
-
-        else:
-
-            logger.warning(
-                "[Agent Node] Max iterations reached"
-            )
-
-            final_response = {
-                "status": "failure",
-                "summary": (
-                    "Max agent iterations reached"
-                ),
-                "modified_files": [],
-                "execution_logs": (
-                    "Agent could not complete task"
-                )
-            }
 
         state["final_response"] = final_response
 
@@ -424,3 +613,4 @@ Execution Logs:
         )
 
     return state
+
