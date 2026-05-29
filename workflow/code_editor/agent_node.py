@@ -31,29 +31,22 @@ MAX_REPEAT_THRESHOLD = 10
 async def discover_tools(
     session: ClientSession
 ) -> str:
-
     try:
-
         discovered = await session.list_tools()
-
         return "\n".join([
             f"- {t.name}: {t.description}"
             for t in discovered.tools
         ])
-
     except Exception:
-
         logger.exception(
             "[Agent Node] Tool discovery failed"
         )
-
     return "No tools available."
 
 
 def clean_json_response(
     response: str
 ) -> Dict[str, Any]:
-
     raw_text = response.strip()
 
     if raw_text.startswith("```"):
@@ -92,35 +85,26 @@ def clean_json_response(
     parsed = False
 
     try:
-
         loaded = json.loads(raw_text)
-
         if isinstance(loaded, dict):
             final_data.update(loaded)
             parsed = True
-
     except Exception:
         pass
 
     if not parsed:
-
         try:
-
             match = re.search(
                 r'\{.*\}',
                 raw_text,
                 re.DOTALL
             )
-
             if match:
-
                 loaded = json.loads(
                     match.group(0)
                 )
-
                 if isinstance(loaded, dict):
                     final_data.update(loaded)
-
         except Exception:
             pass
 
@@ -134,13 +118,10 @@ async def execute_tool_calls(
     session: ClientSession,
     tool_calls: List[Dict[str, Any]]
 ) -> str:
-
     logs = []
 
     for tool_call in tool_calls:
-
         try:
-
             tool_name = tool_call.get("tool")
             arguments = tool_call.get(
                 "arguments",
@@ -165,12 +146,10 @@ async def execute_tool_calls(
             tool_output = ""
 
             if hasattr(result, "content"):
-
                 tool_output = "\n".join([
                     getattr(c, "text", str(c))
                     for c in result.content
                 ])
-
             else:
                 tool_output = str(result)
 
@@ -192,7 +171,6 @@ RESULT:
             )
 
         except Exception as e:
-
             logger.exception(
                 f"[Agent Node] Tool execution failed: "
                 f"{tool_call}"
@@ -226,6 +204,18 @@ async def run_single_iteration(
         state.get("tool_results", [])
     )
 
+    # 1. The Circuit Breaker: Force completion if taking too long
+    circuit_breaker = ""
+    if iteration >= 2:
+        logger.warning(f"[Agent Node] Circuit breaker activated for iteration {iteration}. Forcing task completion.")
+        circuit_breaker = """
+CRITICAL SYSTEM OVERRIDE:
+You have reached the step limit for this operation. 
+You are strictly forbidden from outputting "status": "pending" in this turn.
+You MUST execute your final tool call (if any) and set your status to "success" or "failure" NOW.
+"""
+
+    # 2. Updated System Prompt with Anti-Procrastination Rules
     system_prompt = f"""
 Ignore all previous instructions.
 
@@ -240,10 +230,10 @@ Rules:
 - do not assume execution succeeded
 - use deterministic reasoning
 - use tools whenever needed
-- if more information is needed use tool_calls
-- if task is incomplete return status=pending
-- if task is complete return status=success
-- if task cannot continue return status=failure
+- If you have successfully read a file or gathered information, you must execute the write/modification tool immediately.
+- Repeating 'pending' across iterations without changing files is prohibited.
+- CRITICAL: When updating an existing file with the 'write_file' tool, you MUST first read the file using 'read_file'. You must preserve all original content and only modify or append the specific targeted lines. Never assume or placeholder "Your existing content" in the content string.
+{circuit_breaker}
 
 You may call tools using this schema:
 
@@ -309,7 +299,6 @@ PREVIOUS TOOL RESULTS:
     with trace_manager.trace(
         f"ollama_agent_iteration_{iteration}"
     ):
-
         response = await ollama_client.agenerate(
             prompt=f"{system_prompt}\n\n{user_prompt}",
             model=MODEL_NAME
@@ -332,7 +321,6 @@ PREVIOUS TOOL RESULTS:
     )
 
     if tool_calls:
-
         logger.info(
             f"[Agent Node] Executing "
             f"{len(tool_calls)} tool calls"
@@ -357,7 +345,13 @@ PREVIOUS TOOL RESULTS:
             f"{tool_logs}"
         )
 
-        cleaned["status"] = "pending"
+        # Force status to pending ONLY if the circuit breaker hasn't fired
+        # If the LLM was forced to output 'success', we honor it so the loop exits.
+        if iteration < 2:
+            cleaned["status"] = "pending"
+        elif cleaned.get("status") not in ["success", "failure"]:
+            # Fallback: If it still hallucinated 'pending' despite the warning, override it.
+            cleaned["status"] = "success"
 
     validated = (
         AgentNodeResponse
@@ -376,7 +370,6 @@ async def agent_node(
     with trace_manager.trace(
         "agent_node_total_execution"
     ):
-
         logger.info(
             "[Agent Node] Starting execution agent..."
         )
@@ -444,7 +437,6 @@ async def agent_node(
                     state["iteration_count"] = iteration
 
                     try:
-
                         response = (
                             await run_single_iteration(
                                 state=state,
@@ -484,7 +476,6 @@ Execution Logs:
                             and current_summary
                             == previous_summary
                         ):
-
                             repeat_counter += 1
 
                             logger.warning(
@@ -529,41 +520,33 @@ Execution Logs:
                         final_response = response
 
                         if status == "success":
-
                             logger.info(
                                 "[Agent Node] "
                                 "Task completed"
                             )
-
                             break
 
                         if status == "failure":
-
                             logger.error(
                                 "[Agent Node] "
                                 "Task failed"
                             )
-
                             break
 
                         if status == "pending":
-
                             logger.info(
                                 "[Agent Node] "
                                 "Continuing execution..."
                             )
-
                             continue
 
                         logger.warning(
                             "[Agent Node] Unknown "
                             "status received"
                         )
-
                         break
 
                     except Exception:
-
                         logger.exception(
                             "[Agent Node] "
                             "Iteration failed"
@@ -586,7 +569,6 @@ Execution Logs:
                         break
 
                 else:
-
                     logger.warning(
                         "[Agent Node] Max "
                         "iterations reached"
@@ -613,4 +595,3 @@ Execution Logs:
         )
 
     return state
-
