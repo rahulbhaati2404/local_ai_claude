@@ -5,7 +5,6 @@ import mcp
 
 def read_file(repository_path: str, file_path: str) -> str:
     """Reads the full text content of a file."""
-    # Build the absolute path safely
     full_path = os.path.join(repository_path, file_path)
     logger.info(
             f"[MCP read_file] repository_path={repository_path}"

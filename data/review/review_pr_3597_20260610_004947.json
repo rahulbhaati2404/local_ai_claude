@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-06-10T00:49:47.727060",
+  "metadata": {
+    "pr_url": "https://github.com/python/peps/pull/3597",
+    "repository_path": null,
+    "source_branch": null,
+    "target_branch": null,
+    "pr_id": "pr_3597"
+  },
+  "review_results": {
+    "summary": "Update external link reference format",
+    "issues": [
+      {
+        "file": "peps/pep-0617.rst",
+        "line": 10,
+        "severity": "INFO",
+        "description": "Change from absolute URL to internal reference",
+        "recommendation": "Keep the updated internal reference format"
+      }
+    ]
+  }
+}

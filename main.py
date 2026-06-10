@@ -4,7 +4,7 @@ from fastapi.responses import RedirectResponse
 from core.config import settings
 from core.logger import logger
 from api.pr_review import  pr_review_router
-from api.code_editor import router as code_editor_router
+from api.code_editor import code_editor_router as code_editor_router
 import os
 import sys
 
@@ -46,4 +46,4 @@ async def shutdown_event() -> None:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=9002, reload=True)

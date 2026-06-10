@@ -1,106 +1,160 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Local AI Agent Engine</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local AI Agent Console</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script type="module" src="./app.js"></script>
   </head>
   <body>
     <div class="page-shell">
       <header class="hero">
-        <div>
-          <p class="eyebrow">Live streamed AI workflows</p>
-          <h1>Local AI Agent Engine</h1>
-          <p class="subtitle">
-            Two independent chat panels for PR review and code editing. Each request locks its own form while the
-            SSE stream is active, then unlocks when the final result arrives.
+        <div class="hero-copy">
+          <span class="eyebrow">Local AI Agent Engine</span>
+          <h1>Two streamed workflows. One polished console.</h1>
+          <p>
+            Review pull requests, run code editor automation, and watch every
+            streamed update appear live while the active panel is locked.
           </p>
         </div>
         <div class="hero-card">
-          <div class="hero-stat">
-            <span>Backend</span>
-            <strong>FastAPI + SSE</strong>
+          <div class="hero-card-top">
+            <span class="status-dot"></span>
+            <span>Realtime SSE</span>
           </div>
-          <div class="hero-stat">
-            <span>Frontend</span>
-            <strong>Static browser app</strong>
+          <div class="hero-metrics">
+            <div>
+              <strong>PR Review</strong>
+              <span>Streaming response</span>
+            </div>
+            <div>
+              <strong>Code Editor</strong>
+              <span>File + prompt workflow</span>
+            </div>
           </div>
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel" id="pr-panel" data-key="prReview">
+      <main class="workspace">
+        <section class="panel" id="prPanel">
           <div class="panel-header">
             <div>
-              <p class="panel-kicker">API 01</p>
+              <span class="panel-kicker">Workflow 01</span>
               <h2>PR Review</h2>
             </div>
-            <span class="status-pill" data-status>Idle</span>
+            <div class="panel-badge">Streamed review</div>
           </div>
 
-          <form class="form" id="pr-form">
-            <label>
+          <form id="prForm" class="form-stack">
+            <label class="field">
               <span>Pull request URL</span>
               <input
-                id="pr-url"
+                id="prUrl"
                 type="url"
                 placeholder="https://github.com/org/repo/pull/123"
-                required
+                autocomplete="off"
               />
             </label>
-            <button type="submit" class="primary-btn">Run PR Review</button>
+
+            <button class="primary-btn" id="prSubmit" type="submit">
+              <span class="btn-label">Start PR Review</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
           </form>
 
-          <div class="chatbox" id="pr-chat" aria-live="polite"></div>
-        </section>
-
-        <section class="panel" id="code-panel" data-key="codeEditor">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">API 02</p>
-              <h2>Code Editor</h2>
-            </div>
-            <span class="status-pill" data-status>Idle</span>
+          <div class="stream-meta">
+            <span id="prState" class="state-pill idle">Idle</span>
+            <span class="hint">The next PR request stays locked until this stream ends.</span>
           </div>
 
-          <form class="form" id="code-form">
-            <label>
-              <span>Workspace path</span>
-              <input id="workspace-path" type="text" placeholder="D:\\projects\\my-app" required />
-            </label>
+          <div class="stream-window">
+            <div class="stream-window-title">Live Output</div>
+            <div id="prLog" class="stream-log"></div>
+          </div>
+        </section>
 
-            <label>
-              <span>User prompt</span>
+        <section class="panel" id="codePanel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-kicker">Workflow 02</span>
+              <h2>Code Editor</h2>
+            </div>
+            <div class="panel-badge accent">Streamed execution</div>
+          </div>
+
+          <form id="codeForm" class="form-stack">
+            <div class="field-grid">
+              <label class="field file-field">
+                <span>File path</span>
+                <input
+                  id="filePath"
+                  type="text"
+                  placeholder="D:\\folder\\file.txt"
+                  autocomplete="off"
+                />
+              </label>
+              <button id="pickFileBtn" class="secondary-btn" type="button">
+                Choose File
+              </button>
+            </div>
+
+            <input id="filePicker" class="hidden-file-input" type="file" />
+
+            <label class="field">
+              <span>Prompt</span>
               <textarea
-                id="user-prompt"
-                rows="4"
-                placeholder="Describe what you want the code assistant to do..."
-                required
+                id="codePrompt"
+                rows="5"
+                placeholder="Describe the exact change you want the agent to make..."
               ></textarea>
             </label>
 
-            <label>
-              <span>File path</span>
-              <input id="file-path" type="text" placeholder="src/app/main.py" />
-            </label>
+            <div class="field-grid compact">
+              <label class="field">
+                <span>Mode</span>
+                <select id="mode">
+                  <option value="ask">Ask</option>
+                  <option value="plan">Plan</option>
+                  <option value="agent">Agent</option>
+                </select>
+              </label>
+              <div class="path-note">
+                Browsers do not expose full local absolute paths directly. The file picker helps
+                select the file, but the path field remains editable and is the authoritative value
+                sent to the backend.
+              </div>
+            </div>
 
-            <label>
-              <span>Mode</span>
-              <select id="mode">
-                <option value="ask">ask</option>
-                <option value="agent">agent</option>
-                <option value="plan">plan</option>
-              </select>
-            </label>
-
-            <button type="submit" class="primary-btn">Run Code Editor</button>
+            <button class="primary-btn" id="codeSubmit" type="submit">
+              <span class="btn-label">Run Code Editor</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
           </form>
 
-          <div class="chatbox" id="code-chat" aria-live="polite"></div>
+          <div class="stream-meta">
+            <span id="codeState" class="state-pill idle">Idle</span>
+            <span class="hint">Input stays locked until the stream completes.</span>
+          </div>
+
+          <div class="stream-window">
+            <div class="stream-window-title">Live Output</div>
+            <div id="codeLog" class="stream-log"></div>
+          </div>
         </section>
       </main>
     </div>
+
+    <template id="messageTemplate">
+      <div class="message">
+        <div class="message-meta">
+          <span class="message-type"></span>
+          <span class="message-time"></span>
+        </div>
+        <div class="message-body"></div>
+      </div>
+    </template>
+
+    <script src="./app.js"></script>
   </body>
 </html>
+

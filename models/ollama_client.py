@@ -1,4 +1,3 @@
-import asyncio
 import ollama
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -72,7 +71,9 @@ class OllamaClient:
         prompt: str,
         model: str
     ):
-        logger.info(f"Streaming generation using {model}")
+        logger.info(
+            f"Streaming generation using {model}"
+        )
         stream = await self.async_client.generate(
             model=model,
             prompt=prompt,

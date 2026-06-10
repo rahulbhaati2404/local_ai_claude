@@ -40,8 +40,10 @@ ollama
 #http://127.0.0.1:8000/  backend
 
 #stant backend-> python -m main
-#start frontend-> cd frontend && python -m http.server 5173
-#check http://127.0.0.1:5173  && http://127.0.0.1:8000
+#start frontend-> cd frontend && python -m http.server 5175
+#check http://127.0.0.1:5175  && http://127.0.0.1:9002
+#http://127.0.0.1:5175/   cd frontend ; node server.js
+#http://127.0.0.1:9002/  python -m main
 
 
 #eg pr . https://github.com/python/peps/pull/3597

@@ -1,4 +1,3 @@
-import httpx
 import json
 from dto.review_dto import PRReviewState
 from core.logger import logger
@@ -11,7 +10,7 @@ from core.logger import logger
 
 
 MODEL_NAME = settings.OLLAMA_DEFAULT_MODEL
-MAX_SAFE_DIFF_LENGTH = 8000  # Threshold character count for a "large" PR
+MAX_SAFE_DIFF_LENGTH = 10000
 
 def chunk_diff_by_files(raw_diff: str) -> list:
     """Helper utility to segment one massive diff patch into clear individual file strings."""
@@ -30,7 +29,6 @@ def chunk_diff_by_files(raw_diff: str) -> list:
 
 async def planner_agent_node(state: PRReviewState) -> PRReviewState:
     """
-    Step 2 Graph Node: High-performance code reviewer.
     Dynamically splits large diff chunks to bypass local context window degradation.
     """
     raw_diff = state.get("raw_git_diff", "")
@@ -38,9 +36,9 @@ async def planner_agent_node(state: PRReviewState) -> PRReviewState:
     if not raw_diff.strip() or "No code modifications found" in raw_diff:
         state["output"] = {"summary": "No changes to analyze.", "issues": []}
         return state
-
+    
     system_prompt = (
-        "You are an expert Senior Code Reviewer. Analyze the provided git diff chunk.\n"
+        "You are an expert Code Reviewer. Analyze the provided git diff chunk.\n"
         "Identify critical bugs, performance issues, or security flaws.\n"
         "Output your findings strictly as a JSON object matching this schema:\n"
         "{\n"
@@ -55,9 +53,8 @@ async def planner_agent_node(state: PRReviewState) -> PRReviewState:
     compiled_issues = []
     summaries = []
 
-    # Check if we need to chunk the files due to massive PR length
     if len(raw_diff) > MAX_SAFE_DIFF_LENGTH:
-        logger.warning(f"[Review Agent] Massive PR detected ({len(raw_diff)} chars). Executing dynamic map-reduce processing...")
+        logger.info(f"[Review Agent] Massive PR detected ({len(raw_diff)} chars). Executing dynamic map-reduce processing...")
         diff_blocks = chunk_diff_by_files(raw_diff)
     else:
         diff_blocks = [raw_diff]
@@ -70,9 +67,10 @@ async def planner_agent_node(state: PRReviewState) -> PRReviewState:
         logger.info(f"[Review Agent] Prompt tokens for segment {idx + 1}: {len(full_prompt) // 4} (approx.)")
 
         try:
-            raw_response = await ollama_client.agenerate(prompt=full_prompt, model=MODEL_NAME)
-            
-            # Clean response text and strip code blocks if model added them mistakenly
+            raw_response = ""
+            async for chunk in ollama_client.astream_generate(prompt=full_prompt, model=MODEL_NAME):
+                raw_response += chunk
+
             cleaned = re.sub(r"```json|```", "", raw_response).strip()
             parsed_chunk = json.loads(cleaned)
             
@@ -85,7 +83,6 @@ async def planner_agent_node(state: PRReviewState) -> PRReviewState:
             logger.error(f"[Review Agent] Error analyzing segment {idx + 1}: {str(e)}")
             continue
 
-    # Consolidate our fragmented runs back into a single unified output report
     state["output"] = {
         "summary": " | ".join(summaries) if summaries else "Review completed across chunks.",
         "issues": compiled_issues

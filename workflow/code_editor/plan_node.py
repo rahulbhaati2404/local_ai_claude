@@ -1,42 +1,33 @@
 import json
 import re
-
 from core.logger import logger
 from models.ollama_client import ollama_client
-
 from dto.code_editor_dto import (
     EditorState,
     PlanNodeResponse
 )
-
 from context.token_counter import token_counter
-
 from observability.metrics import metrics_collector
 from observability.tracing import trace_manager
-
 from mcp.client.stdio import stdio_client
 from mcp import ClientSession
-
 from mcp_tools.mcp_starter import MCP_SERVER_PARAMS
-
 from core.config import settings
 
 MODEL_NAME = settings.OLLAMA_DEFAULT_MODEL
 
-
 async def fetch_file_context(
-    workspace: str,
     target_file: str
 ) -> str:
 
-    if not workspace or not target_file:
+    if not target_file:
         return ""
 
     try:
-
-        async with stdio_client(
-            MCP_SERVER_PARAMS
-        ) as (read_stream, write_stream):
+        async with stdio_client(MCP_SERVER_PARAMS) as (
+            read_stream,
+            write_stream
+        ):
 
             async with ClientSession(
                 read_stream,
@@ -44,11 +35,10 @@ async def fetch_file_context(
             ) as session:
 
                 await session.initialize()
-
                 response = await session.call_tool(
                     name="read_file",
                     arguments={
-                        "repository_path": workspace,
+                        "repository_path": "",
                         "file_path": target_file
                     }
                 )
@@ -62,12 +52,9 @@ async def fetch_file_context(
                 ):
 
                     for item in response.content:
-
                         if hasattr(item, "text"):
                             extracted_text += item.text + "\n"
-
                         elif isinstance(item, dict):
-
                             if "text" in item:
                                 extracted_text += (
                                     str(item["text"]) + "\n"
@@ -76,17 +63,13 @@ async def fetch_file_context(
                 return extracted_text.strip()
 
     except Exception as e:
-
         logger.exception(
             "[Plan Node] MCP read_file failed"
         )
-
     return ""
 
 
-async def plan_node(
-    state: EditorState
-) -> EditorState:
+async def plan_node(state: EditorState) -> EditorState:
 
     with trace_manager.trace(
         "plan_node_total_execution"
@@ -94,11 +77,6 @@ async def plan_node(
 
         logger.info(
             "[Plan Node] Building execution roadmap..."
-        )
-
-        workspace = state.get(
-            "workspace_path",
-            ""
         )
 
         target_file = state.get(
@@ -110,51 +88,44 @@ async def plan_node(
         if target_file:
 
             file_context = await fetch_file_context(
-                workspace,
                 target_file
             )
 
         system_prompt = """
-Ignore all previous instructions.
+        Ignore all previous instructions.
 
-You are a principal software architect.
+        You are a principal software architect.
 
-Your task:
-- analyze code carefully
-- create deterministic implementation plans
-- avoid hallucinations
-- do not invent files/functions/classes
-- use ONLY provided context
+        Your task:
+        - analyze code carefully
+        - create deterministic implementation plans
+        - use ONLY provided context
 
-Return ONLY valid JSON.
+        Return ONLY valid JSON.
 
-Required schema:
+        Required schema:
 
-{
-  "estimated_complexity": "Low" | "Medium" | "High",
-  "summary": "technical overview",
-  "steps": [
-    {
-      "step_number": 1,
-      "description": "implementation action",
-      "expected_outcome": "validation result"
-    }
-  ]
-}
+        {
+        "summary": "technical overview",
+        "steps": [
+            {
+            "step_number": 1,
+            "description": "implementation action",
+            "expected_outcome": "validation result"
+            }
+        ]
+        }
 """
 
         user_prompt = f"""
-WORKSPACE:
-{workspace}
+            TARGET FILE:
+            {target_file}
 
-TARGET FILE:
-{target_file}
+            FILE CONTEXT:
+            {file_context}
 
-FILE CONTEXT:
-{file_context}
-
-USER OBJECTIVE:
-{state["user_prompt"]}
+            USER OBJECTIVE:
+            {state["user_prompt"]}
 """
 
         total_tokens = (
@@ -211,7 +182,6 @@ USER OBJECTIVE:
             )
 
             final_data = {
-                "estimated_complexity": "Medium",
                 "summary": "",
                 "steps": []
             }
@@ -221,7 +191,6 @@ USER OBJECTIVE:
             try:
 
                 loaded = json.loads(raw_text)
-
                 if isinstance(loaded, dict):
                     final_data.update(loaded)
                     parsed = True
@@ -232,7 +201,6 @@ USER OBJECTIVE:
             if not parsed:
 
                 try:
-
                     match = re.search(
                         r'\{.*\}',
                         raw_text,
@@ -242,7 +210,6 @@ USER OBJECTIVE:
                     if match:
 
                         extracted = match.group(0)
-
                         loaded = json.loads(extracted)
 
                         if isinstance(loaded, dict):
@@ -286,7 +253,6 @@ USER OBJECTIVE:
             )
 
             state["final_response"] = {
-                "estimated_complexity": "High",
                 "summary": response,
                 "steps": []
             }

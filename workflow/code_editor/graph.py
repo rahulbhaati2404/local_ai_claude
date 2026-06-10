@@ -13,12 +13,10 @@ from workflow.code_editor.agent_node import agent_node
 
 workflow = StateGraph(EditorState)
 
-# Define our processing building blocks
 workflow.add_node("ask_node", ask_node)
 workflow.add_node("plan_node", plan_node)
 workflow.add_node("agent_node", agent_node)
 
-# Map our Entry Point to evaluate the conditional router edge function
 workflow.set_conditional_entry_point(
     mode_router_edge,
     {
@@ -28,11 +26,9 @@ workflow.set_conditional_entry_point(
     }
 )
 
-# Pipe all execution paths to a uniform termination point
 workflow.add_edge("ask_node", END)
 workflow.add_edge("plan_node", END)
 workflow.add_edge("agent_node", END)
 
-# Compile the final application graph object
 code_editor_app = workflow.compile()
 logger.info("Successfully compiled Multi-Mode AI Code Editor LangGraph engine.")

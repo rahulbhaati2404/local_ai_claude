@@ -1,25 +1,19 @@
 import json
 import re
 from typing import Dict, Any, List
-
 from core.logger import logger
 from models.ollama_client import ollama_client
-
 from dto.code_editor_dto import (
     EditorState,
     AgentNodeResponse
 )
 
 from context.token_counter import token_counter
-
 from observability.metrics import metrics_collector
 from observability.tracing import trace_manager
-
 from mcp.client.stdio import stdio_client
 from mcp import ClientSession
-
 from mcp_tools.mcp_starter import MCP_SERVER_PARAMS
-
 from core.config import settings
 
 MODEL_NAME = settings.OLLAMA_DEFAULT_MODEL
@@ -27,10 +21,7 @@ MODEL_NAME = settings.OLLAMA_DEFAULT_MODEL
 MAX_AGENT_ITERATIONS = 50
 MAX_REPEAT_THRESHOLD = 10
 
-
-async def discover_tools(
-    session: ClientSession
-) -> str:
+async def discover_tools(session: ClientSession) -> str:
     try:
         discovered = await session.list_tools()
         return "\n".join([
@@ -44,11 +35,8 @@ async def discover_tools(
     return "No tools available."
 
 
-def clean_json_response(
-    response: str
-) -> Dict[str, Any]:
+def clean_json_response(response: str) -> Dict[str, Any]:
     raw_text = response.strip()
-
     if raw_text.startswith("```"):
         raw_text = "\n".join(
             raw_text.split("\n")[1:]
@@ -114,10 +102,7 @@ def clean_json_response(
     return final_data
 
 
-async def execute_tool_calls(
-    session: ClientSession,
-    tool_calls: List[Dict[str, Any]]
-) -> str:
+async def execute_tool_calls(session: ClientSession,tool_calls: List[Dict[str, Any]]) -> str:
     logs = []
 
     for tool_call in tool_calls:
@@ -154,14 +139,14 @@ async def execute_tool_calls(
                 tool_output = str(result)
 
             log_entry = f"""
-TOOL: {tool_name}
+                TOOL: {tool_name}
 
-ARGUMENTS:
-{json.dumps(arguments, indent=2)}
+                ARGUMENTS:
+                {json.dumps(arguments, indent=2)}
 
-RESULT:
-{tool_output}
-"""
+                RESULT:
+                {tool_output}
+            """
 
             logs.append(log_entry)
 
@@ -178,12 +163,12 @@ RESULT:
 
             logs.append(
                 f"""
-TOOL ERROR:
-{tool_call}
+                TOOL ERROR:
+                {tool_call}
 
-ERROR:
-{str(e)}
-"""
+                ERROR:
+                {str(e)}
+                """
             )
 
     return "\n".join(logs)
@@ -204,7 +189,6 @@ async def run_single_iteration(
         state.get("tool_results", [])
     )
 
-    # 1. The Circuit Breaker: Force completion if taking too long
     circuit_breaker = ""
     if iteration >= 2:
         logger.warning(f"[Agent Node] Circuit breaker activated for iteration {iteration}. Forcing task completion.")
@@ -215,7 +199,6 @@ You are strictly forbidden from outputting "status": "pending" in this turn.
 You MUST execute your final tool call (if any) and set your status to "success" or "failure" NOW.
 """
 
-    # 2. Updated System Prompt with Anti-Procrastination Rules
     system_prompt = f"""
 Ignore all previous instructions.
 
@@ -246,7 +229,6 @@ You may call tools using this schema:
     {{
       "tool": "read_file",
       "arguments": {{
-        "repository_path": "...",
         "file_path": "..."
       }}
     }}
@@ -267,9 +249,6 @@ Return ONLY valid JSON.
 """
 
     user_prompt = f"""
-WORKSPACE:
-{state.get("workspace_path")}
-
 TARGET FILE:
 {state.get("file_path")}
 
@@ -299,7 +278,7 @@ PREVIOUS TOOL RESULTS:
     with trace_manager.trace(
         f"ollama_agent_iteration_{iteration}"
     ):
-        response = await ollama_client.agenerate(
+        response = await ollama_client.astream_generate(
             prompt=f"{system_prompt}\n\n{user_prompt}",
             model=MODEL_NAME
         )
@@ -345,12 +324,9 @@ PREVIOUS TOOL RESULTS:
             f"{tool_logs}"
         )
 
-        # Force status to pending ONLY if the circuit breaker hasn't fired
-        # If the LLM was forced to output 'success', we honor it so the loop exits.
         if iteration < 2:
             cleaned["status"] = "pending"
         elif cleaned.get("status") not in ["success", "failure"]:
-            # Fallback: If it still hallucinated 'pending' despite the warning, override it.
             cleaned["status"] = "success"
 
     validated = (
@@ -363,9 +339,7 @@ PREVIOUS TOOL RESULTS:
     return validated.model_dump()
 
 
-async def agent_node(
-    state: EditorState
-) -> EditorState:
+async def agent_node(state: EditorState) -> EditorState:
 
     with trace_manager.trace(
         "agent_node_total_execution"
@@ -453,17 +427,17 @@ async def agent_node(
 
                         state["agent_history"].append(
                             f"""
-Iteration: {iteration}
+                        Iteration: {iteration}
 
-Status:
-{response.get("status")}
+                        Status:
+                        {response.get("status")}
 
-Summary:
-{current_summary}
+                        Summary:
+                        {current_summary}
 
-Execution Logs:
-{response.get("execution_logs")}
-"""
+                        Execution Logs:
+                        {response.get("execution_logs")}
+                        """
                         )
 
                         logger.info(

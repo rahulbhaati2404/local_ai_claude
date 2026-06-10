@@ -1,105 +1,102 @@
+import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from sse_starlette import EventSourceResponse
 
 from core.logger import logger
 from dto.review_dto import PRReviewState
-from schemas.request import PRReviewRequest
 from workflow.pr_review.graph import pr_review_app
 
 pr_review_router = APIRouter()
 
 
-@pr_review_router.post("/review-pr")
-async def review_pr(
-    payload: PRReviewRequest = Depends(),
-    pr_id: str = Query(None, include_in_schema=False),
-):
+@pr_review_router.api_route("/review-pr", methods=["GET"])
+async def review_pr(pr_url: str):
     """
     Invokes the local AI DevOps Agent workflow and streams intermediate execution
     progress and final structured review notes back to the client in real-time (SSE).
     """
-    has_url = payload.pr_url and payload.pr_url.strip()
-    has_local = (
-        payload.repository_path and payload.repository_path.strip()
-        and payload.source_branch and payload.source_branch.strip()
-        and payload.target_branch and payload.target_branch.strip()
-    )
+    has_url = pr_url and pr_url.strip()
 
-    if not has_url and not has_local:
+    logger.info(f"pr_url: {pr_url}")
+    
+    if not has_url :
         raise HTTPException(
             status_code=400,
             detail="Invalid request. Provide either 'pr_url' OR local repository configurations.",
         )
+    
+    extracted_pr_id = None
 
-    extracted_pr_id = "local_repo"
     if has_url:
         try:
-            url_parts = payload.pr_url.strip().rstrip("/").split("/")
+            url_parts = pr_url.strip().rstrip("/").split("/")
             if url_parts[-1].isdigit():
                 extracted_pr_id = f"pr_{url_parts[-1]}"
         except Exception:
             pass
 
+    logger.info(f"Extracted PR ID: {extracted_pr_id}")
+
     initial_state: PRReviewState = {
-        "pr_url": payload.pr_url.strip() if payload.pr_url else None,
-        "repository_path": payload.repository_path.strip() if payload.repository_path else None,
-        "source_branch": payload.source_branch.strip() if payload.source_branch else None,
-        "target_branch": payload.target_branch.strip() if payload.target_branch else None,
+        "pr_url": pr_url.strip() if pr_url else None,
         "pr_id": extracted_pr_id,
         "raw_git_diff": "",
         "error_message": None,
         "output": {},
     }
 
-    async def event_generator():
-        logger.info("Opening live SSE event stream channel...")
-        final_output = {}
+    logger.info(f"Initial PR Review State: {initial_state}")
 
+    stream_queue: asyncio.Queue = asyncio.Queue()
+    initial_state["stream_queue"] = stream_queue
+
+    final_state_holder: dict = {}
+
+    async def run_review_workflow() -> None:
         try:
-            async for event in pr_review_app.astream_events(initial_state, version="v2"):
-                kind = event.get("event")
-                node_name = event.get("name")
+            final_state_holder["value"] = await pr_review_app.ainvoke(initial_state)
+        except Exception as err:
+            logger.error(f"[PR Review] Workflow failure: {str(err)}", exc_info=True)
+            final_state_holder["error"] = str(err)
+            await stream_queue.put(
+                {
+                    "event": "error",
+                    "data": json.dumps(
+                        {"detail": f"Internal review crash: {str(err)}"}
+                    ),
+                }
+            )
+        finally:
+            await stream_queue.put(None)
 
-                # 1. Keep streaming your status updates
-                if kind == "on_chain_start" and node_name == "LangGraph":
-                    yield {"event": "status", "data": "Initializing PR review pipeline..."}
-                elif kind == "on_node_start":
-                    if node_name == "extract_context":
-                        yield {"event": "status", "data": "Step 1: Extracting change context and diff data..."}
-                    elif node_name == "planner_agent":
-                        yield {"event": "status", "data": "Step 2: Running review analysis on the extracted diff..."}
-                    elif node_name == "structured_generator":
-                        yield {"event": "status", "data": "Step 3: Building the final review report..."}
-                elif kind == "on_node_end":
-                    if node_name == "planner_agent":
-                        yield {"event": "status", "data": "Review complete. Findings mapped successfully."}
+    asyncio.create_task(run_review_workflow())
 
-                # 2. BULLETPROOF CATCH-ALL: Grab state updates from ANY node end event
-                if kind == "on_node_end" and "data" in event:
-                    node_output = event["data"].get("output", {})
-                    if isinstance(node_output, dict):
-                        # If a node updated the 'output' dictionary key in the state, capture it!
-                        if node_output.get("output"):
-                            final_output = node_output["output"]
+    async def review_event_generator():
+        yield {"event": "status", "data": "Connected. Streaming live output..."}
 
-            # 3. Last Line of Defense: If final_output is still empty, check the very last event's complete state
-            if not final_output and kind == "on_chain_end":
-                chain_output = event.get("data", {}).get("output", {})
-                if isinstance(chain_output, dict) and chain_output.get("output"):
-                    final_output = chain_output["output"]
+        while True:
+            event = await stream_queue.get()
+            if event is None:
+                break
+            yield event
 
-            if not final_output:
-                yield {"event": "status", "data": "Warning: No explicit structured output was generated by the nodes."}
+        if final_state_holder.get("error"):
+            return
 
-            yield {
-                "event": "result",
-                "data": json.dumps(final_output),
+        final_state = final_state_holder.get("value", {})
+        output = final_state.get("output", {}) if isinstance(final_state, dict) else {}
+
+        if not output:
+            output = {
+                "status": "failure",
+                "summary": "Execution finished but no valid structural final response was found in the graph state matrix.",
             }
 
-        except Exception as err:
-            logger.error(f"Streaming failure: {str(err)}", exc_info=True)
-            yield {"event": "error", "data": json.dumps({"detail": f"Internal pipeline crash: {str(err)}"})}
+        yield {
+            "event": "result",
+            "data": json.dumps(output),
+        }
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(review_event_generator())

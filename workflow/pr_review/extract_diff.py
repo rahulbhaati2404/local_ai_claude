@@ -15,7 +15,7 @@ from mcp_tools.mcp_starter import MCP_SERVER_PARAMS
 async def extract_context_node(state: PRReviewState) -> PRReviewState:
     """
     Extracts the git diff. Automatically checks if a GitHub PR URL is 
-    provided to fetch it via HTTP; otherwise, falls back to local git commands over MCP.
+    provided to fetch it via HTTP;
     """
     
     with trace_manager.trace("extract_context_total_execution"):
@@ -58,59 +58,5 @@ async def extract_context_node(state: PRReviewState) -> PRReviewState:
                     state["raw_git_diff"] = ""
                     state["error_message"] = error_msg
                     return state
-
-        repo_path = state.get("repository_path")
-        source = state.get("source_branch")
-        target = state.get("target_branch")
-
-        logger.info(f"[Context Node] Missing PR Link. Falling back to local repo extraction: {repo_path}")
-
-        if not repo_path or not os.path.exists(repo_path):
-            error_msg = f"Repository directory path invalid or missing: {repo_path}"
-            logger.error(error_msg)
-            state["raw_git_diff"] = ""
-            state["error_message"] = error_msg
-            return state
-
-        with trace_manager.trace("mcp_client_git_diff_tool"):
-            try:
-                branches_args = f"{target}...{source}"
-                diff_output = ""
-                
-                logger.info(f"[Context Node] Requesting local branch diff via MCP git_diff for: {branches_args}")
-                async with stdio_client(MCP_SERVER_PARAMS) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        
-                        mcp_response = await session.call_tool(
-                            name="git_diff",
-                            arguments={
-                                "repository_path": repo_path,
-                                "branches": branches_args
-                            }
-                        )
-                        if mcp_response.content:
-                            diff_output = mcp_response.content[0].text
-                
-                if "Error" in diff_output:
-                    state["raw_git_diff"] = ""
-                    state["error_message"] = diff_output
-                elif "No local modifications" in diff_output or not diff_output.strip():
-                    state["raw_git_diff"] = f"No code modifications found between branches {target} and {source}."
-                    state["error_message"] = None
-                else:
-                    logger.info(f"Successfully extracted git diff ({len(diff_output)} characters) using MCP git_diff tool.")
-                    state["raw_git_diff"] = diff_output
-                    state["error_message"] = None
-
-                local_diff_tokens = token_counter.estimate_tokens(state["raw_git_diff"])
-                metrics_collector.record("local_diff_tokens", local_diff_tokens)
-                logger.info(f"[Context Node] Extracted context payload size: {local_diff_tokens} tokens.")
-
-            except Exception as e:
-                error_msg = f"Unexpected system or protocol error during context extraction: {str(e)}"
-                logger.error(f"Critical failure: {error_msg}", exc_info=True)
-                state["raw_git_diff"] = ""
-                state["error_message"] = error_msg
 
         return state

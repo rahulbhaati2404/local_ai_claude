@@ -3,11 +3,9 @@ from typing import List, Literal
 from pydantic import BaseModel, Field
 
 class EditorState(TypedDict):
-    # Inputs
     mode: str               # "plan" | "agent" | "ask"
-    user_prompt: str        # The instruction (e.g., "Fix the bug in auth.py")
-    workspace_path: str     # Path to the code repository
-    file_path: str # Specific file for context (optional)
+    user_prompt: str       
+    file_path: str
     
     current_plan: Optional[str]        # Holds the technical strategy if in plan mode
     tool_outputs: List[str]            # Log traces of executed tools

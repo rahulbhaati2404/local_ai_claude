@@ -1,316 +1,310 @@
-const API_BASE_URL = "http://127.0.0.1:8000/api/v1";
-
-const state = {
-  prReview: { busy: false },
-  codeEditor: { busy: false },
+const CONFIG = {
+  backendBaseUrl: 'http://127.0.0.1:9002/api/v1', // edit this if your backend runs elsewhere
 };
 
-const prForm = document.getElementById("pr-form");
-const prUrlInput = document.getElementById("pr-url");
-const prChat = document.getElementById("pr-chat");
-const prPanel = document.getElementById("pr-panel");
-const prStatus = prPanel.querySelector("[data-status]");
+const state = {
+  prBusy: false,
+  codeBusy: false,
+  selectedFileName: '',
+};
 
-const codeForm = document.getElementById("code-form");
-const workspacePathInput = document.getElementById("workspace-path");
-const userPromptInput = document.getElementById("user-prompt");
-const filePathInput = document.getElementById("file-path");
-const modeSelect = document.getElementById("mode");
-const codeChat = document.getElementById("code-chat");
-const codePanel = document.getElementById("code-panel");
-const codeStatus = codePanel.querySelector("[data-status]");
+const $ = (id) => document.getElementById(id);
 
-renderEmptyState(prChat, "Submit a PR URL to start a live review stream.");
-renderEmptyState(codeChat, "Submit code editor inputs to start a live execution stream.");
+const prForm = $('prForm');
+const prUrl = $('prUrl');
+const prSubmit = $('prSubmit');
+const prLog = $('prLog');
+const prState = $('prState');
 
-prForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (state.prReview.busy) {
-    return;
-  }
-  void runPrReview();
-});
+const codeForm = $('codeForm');
+const filePath = $('filePath');
+const codePrompt = $('codePrompt');
+const mode = $('mode');
+const codeSubmit = $('codeSubmit');
+const codeLog = $('codeLog');
+const codeState = $('codeState');
+const pickFileBtn = $('pickFileBtn');
+const filePicker = $('filePicker');
 
-codeForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (state.codeEditor.busy) {
-    return;
-  }
-  void runCodeEditor();
-});
+const template = $('messageTemplate');
 
-async function runPrReview() {
-  const prUrl = prUrlInput.value.trim();
-  if (!prUrl) {
-    appendBubble(prChat, "error", "PR URL is required.");
-    return;
-  }
+function nowStamp() {
+  return new Date().toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
 
-  clearEmptyState(prChat);
-  appendBubble(prChat, "user", `PR URL: ${prUrl}`);
-  setBusy("prReview", true, "Running PR review...");
+function setState(pill, text, variant) {
+  pill.className = `state-pill ${variant}`;
+  pill.textContent = text;
+}
 
+function setLoading(button, loading) {
+  button.disabled = loading;
+  button.classList.toggle('is-loading', loading);
+}
+
+function setPanelBusy(panelBusy, controls, pill, variant, label, button) {
+  const loading = panelBusy;
+  controls.forEach((control) => {
+    control.disabled = loading;
+  });
+  setLoading(button, loading);
+  setState(pill, label, variant);
+}
+
+function clearLog(logNode) {
+  logNode.innerHTML = '';
+}
+
+function appendMessage(logNode, kind, label, body) {
+  const fragment = template.content.cloneNode(true);
+  const message = fragment.querySelector('.message');
+  const typeNode = fragment.querySelector('.message-type');
+  const timeNode = fragment.querySelector('.message-time');
+  const bodyNode = fragment.querySelector('.message-body');
+
+  message.classList.add(kind);
+  typeNode.textContent = label;
+  timeNode.textContent = nowStamp();
+  bodyNode.textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+
+  logNode.appendChild(fragment);
+  logNode.scrollTop = logNode.scrollHeight;
+}
+
+function safeJsonParse(text) {
   try {
-    const params = new URLSearchParams({ pr_url: prUrl });
-    const response = await fetch(`${API_BASE_URL}/review-pr?${params.toString()}`, {
-      method: "POST",
-      headers: { Accept: "text/event-stream" },
-    });
-
-    await handleSseResponse(response, prChat, "prReview");
+    return JSON.parse(text);
   } catch (error) {
-    appendBubble(prChat, "error", `Request failed: ${formatError(error)}`);
-  } finally {
-    setBusy("prReview", false, "Idle");
+    return text;
   }
 }
 
-async function runCodeEditor() {
-  const workspacePath = workspacePathInput.value.trim();
-  const userPrompt = userPromptInput.value.trim();
-  const filePath = filePathInput.value.trim();
-  const mode = modeSelect.value;
-
-  if (!workspacePath || !userPrompt) {
-    appendBubble(codeChat, "error", "Workspace path and user prompt are required.");
-    return;
-  }
-
-  clearEmptyState(codeChat);
-  appendBubble(
-    codeChat,
-    "user",
-    [
-      `Workspace path: ${workspacePath}`,
-      `Mode: ${mode}`,
-      `File path: ${filePath || "(none)"}`,
-      `Prompt: ${userPrompt}`,
-    ].join("\n"),
-  );
-  setBusy("codeEditor", true, "Running code editor...");
-
-  try {
-    const params = new URLSearchParams({
-      workspace_path: workspacePath,
-      user_prompt: userPrompt,
-      mode,
-    });
-
-    if (filePath) {
-      params.set("file_path", filePath);
+function getStreamUrl(pathname, params) {
+  const url = new URL(`${CONFIG.backendBaseUrl}${pathname}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, value);
     }
-
-    const response = await fetch(`${API_BASE_URL}/edit-code?${params.toString()}`, {
-      method: "POST",
-      headers: { Accept: "text/event-stream" },
-    });
-
-    await handleSseResponse(response, codeChat, "codeEditor");
-  } catch (error) {
-    appendBubble(codeChat, "error", `Request failed: ${formatError(error)}`);
-  } finally {
-    setBusy("codeEditor", false, "Idle");
-  }
+  });
+  return url.toString();
 }
 
-async function handleSseResponse(response, chatContainer, sectionKey) {
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(parseResponseError(body, response.status));
-  }
+function openStream({
+  pathname,
+  params,
+  logNode,
+  pill,
+  busySetter,
+  onResult,
+  onDone,
+}) {
+  const url = getStreamUrl(pathname, params);
+  const source = new EventSource(url);
 
-  if (!response.body) {
-    throw new Error("The browser did not expose a readable stream.");
-  }
-
-  appendBubble(chatContainer, "status", "Connected. Streaming live output...");
-  await readSseStream(response.body, (event) => {
-    if (!event.type && !event.data) {
-      return;
-    }
-
-    if (event.type === "status") {
-      appendBubble(chatContainer, "status", event.data || "Working...");
-      return;
-    }
-
-    if (event.type === "error") {
-      appendBubble(chatContainer, "error", normalizePayload(event.data));
-      return;
-    }
-
-    if (event.type === "result") {
-      appendResultBubble(chatContainer, event.data);
-      return;
-    }
-
-    appendBubble(chatContainer, "status", event.data || event.type);
+  source.addEventListener('status', (event) => {
+    appendMessage(logNode, 'status', 'Status', event.data);
   });
 
-  const statusLabel = sectionKey === "prReview" ? "Review complete" : "Execution complete";
-  appendBubble(chatContainer, "status", statusLabel);
-}
+  source.addEventListener('result', (event) => {
+    const payload = safeJsonParse(event.data);
+    appendMessage(logNode, 'result', 'Result', payload);
+    onResult?.(payload);
+    source.close();
+    busySetter(false);
+    setState(pill, 'Done', 'done');
+    onDone?.(null, payload);
+  });
 
-async function readSseStream(stream, onEvent) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  source.addEventListener('error', (event) => {
+    const payload = event?.data ? safeJsonParse(event.data) : { detail: 'Stream failed' };
+    appendMessage(logNode, 'error', 'Error', payload);
+    source.close();
+    busySetter(false);
+    setState(pill, 'Error', 'error');
+    onDone?.(payload, null);
+  });
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (value) {
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) {
+      return;
     }
+    source.close();
+    busySetter(false);
+    setState(pill, 'Error', 'error');
+    appendMessage(logNode, 'error', 'Error', 'Stream connection closed unexpectedly.');
+    onDone?.({ detail: 'Stream connection closed unexpectedly.' }, null);
+  };
 
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const rawEvent = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const parsed = parseSseBlock(rawEvent);
-      if (parsed) {
-        onEvent(parsed);
-      }
-      boundary = buffer.indexOf("\n\n");
-    }
-
-    if (done) {
-      const tail = buffer.trim();
-      if (tail) {
-        const parsed = parseSseBlock(tail);
-        if (parsed) {
-          onEvent(parsed);
-        }
-      }
-      break;
-    }
-  }
+  return source;
 }
 
-function parseSseBlock(block) {
-  const event = { type: "message", data: "" };
-  const lines = block.split(/\r?\n/);
+function updateControlLock(lock) {
+  const prControls = [prUrl];
+  const codeControls = [filePath, codePrompt, mode, pickFileBtn, filePicker];
 
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      event.type = line.slice(6).trim();
-      continue;
-    }
+  setPanelBusy(
+    lock && state.prBusy,
+    prControls,
+    prState,
+    lock && state.prBusy ? 'loading' : 'idle',
+    lock && state.prBusy ? 'Working' : 'Idle',
+    prSubmit,
+  );
 
-    if (line.startsWith("data:")) {
-      const value = line.slice(5).trimStart();
-      event.data = event.data ? `${event.data}\n${value}` : value;
-    }
-  }
-
-  return event.data || event.type !== "message" ? event : null;
+  setPanelBusy(
+    lock && state.codeBusy,
+    codeControls,
+    codeState,
+    lock && state.codeBusy ? 'loading' : 'idle',
+    lock && state.codeBusy ? 'Working' : 'Idle',
+    codeSubmit,
+  );
 }
 
-function setBusy(sectionKey, busy, label) {
-  state[sectionKey].busy = busy;
+function syncBusyFlags() {
+  setPanelBusy(
+    state.prBusy,
+    [prUrl],
+    prState,
+    state.prBusy ? 'loading' : 'idle',
+    state.prBusy ? 'Working' : 'Idle',
+    prSubmit,
+  );
 
-  const isPrReview = sectionKey === "prReview";
-  const panel = isPrReview ? prPanel : codePanel;
-  const status = isPrReview ? prStatus : codeStatus;
-  const form = isPrReview ? prForm : codeForm;
-  const button = form.querySelector("button[type='submit']");
-
-  status.textContent = label;
-  status.classList.toggle("is-active", busy);
-
-  for (const element of form.querySelectorAll("input, textarea, select, button")) {
-    element.disabled = busy;
-  }
-
-  button.textContent = busy ? "Loading..." : (isPrReview ? "Run PR Review" : "Run Code Editor");
-  panel.dataset.busy = String(busy);
+  setPanelBusy(
+    state.codeBusy,
+    [filePath, codePrompt, mode, pickFileBtn, filePicker],
+    codeState,
+    state.codeBusy ? 'loading' : 'idle',
+    state.codeBusy ? 'Working' : 'Idle',
+    codeSubmit,
+  );
 }
 
-function appendBubble(container, tone, text) {
-  clearEmptyState(container);
+prForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (state.prBusy) return;
 
-  const bubble = document.createElement("div");
-  bubble.className = `bubble ${tone}`;
-
-  if (tone === "status" && typeof text === "string" && text.startsWith("Connected.")) {
-    const spinner = document.createElement("span");
-    spinner.className = "spinner";
-    spinner.textContent = text;
-    bubble.appendChild(spinner);
-  } else if (typeof text === "string") {
-    bubble.textContent = text;
-  } else {
-    bubble.textContent = normalizePayload(text);
+  const url = prUrl.value.trim();
+  if (!url) {
+    appendMessage(prLog, 'error', 'Validation', 'PR URL cannot be empty.');
+    return;
   }
 
-  container.appendChild(bubble);
-  container.scrollTop = container.scrollHeight;
-}
+  state.prBusy = true;
+  clearLog(prLog);
+  setState(prState, 'Working', 'loading');
+  syncBusyFlags();
+  appendMessage(prLog, 'status', 'Status', 'Connected. Streaming live output...');
 
-function appendResultBubble(container, payload) {
-  const bubble = document.createElement("div");
-  bubble.className = "bubble result";
+  openStream({
+    pathname: '/review-pr',
+    params: { pr_url: url },
+    logNode: prLog,
+    pill: prState,
+    busySetter: (busy) => {
+      state.prBusy = busy;
+      syncBusyFlags();
+    },
+  });
+});
 
-  const title = document.createElement("strong");
-  title.textContent = "Final result";
+pickFileBtn.addEventListener('click', async () => {
+  if (state.codeBusy) return;
 
-  const pre = document.createElement("pre");
-  pre.textContent = normalizePayload(payload);
-
-  bubble.append(title, document.createElement("br"), pre);
-  container.appendChild(bubble);
-  container.scrollTop = container.scrollHeight;
-}
-
-function renderEmptyState(container, message) {
-  container.innerHTML = "";
-  const empty = document.createElement("div");
-  empty.className = "empty-state";
-  empty.textContent = message;
-  container.appendChild(empty);
-}
-
-function clearEmptyState(container) {
-  const emptyState = container.querySelector(".empty-state");
-  if (emptyState) {
-    emptyState.remove();
-  }
-}
-
-function formatError(error) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function parseResponseError(body, statusCode) {
-  const fallback = `Request failed with status ${statusCode}.`;
-  if (!body) {
-    return fallback;
-  }
-
-  try {
-    const parsed = JSON.parse(body);
-    return parsed.detail || parsed.message || fallback;
-  } catch {
-    return body.trim() || fallback;
-  }
-}
-
-function normalizePayload(payload) {
-  if (payload == null) {
-    return "";
-  }
-
-  if (typeof payload === "string") {
+  if (window.showOpenFilePicker) {
     try {
-      const parsed = JSON.parse(payload);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      return payload;
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: false,
+      });
+      const file = await handle.getFile();
+      filePath.value = file.webkitRelativePath || file.name;
+      state.selectedFileName = file.name;
+      appendMessage(
+        codeLog,
+        'status',
+        'File',
+        `Selected "${file.name}". Paste the absolute path into the field if your browser does not expose it.`,
+      );
+      return;
+    } catch (error) {
+      // User canceled the picker or the browser blocked the API.
     }
   }
 
-  return JSON.stringify(payload, null, 2);
-}
+  filePicker.click();
+});
+
+filePicker.addEventListener('change', () => {
+  if (!filePicker.files || !filePicker.files.length) return;
+  const file = filePicker.files[0];
+  state.selectedFileName = file.name;
+  if (!filePath.value.trim()) {
+    filePath.value = file.name;
+  }
+  appendMessage(
+    codeLog,
+    'status',
+    'File',
+    `Selected "${file.name}". Enter the absolute path if needed before submitting.`,
+  );
+});
+
+codeForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (state.codeBusy) return;
+
+  const file = filePath.value.trim();
+  const prompt = codePrompt.value.trim();
+  const selectedMode = mode.value.trim();
+
+  if (!file) {
+    appendMessage(codeLog, 'error', 'Validation', 'File path cannot be empty.');
+    return;
+  }
+
+  if (!prompt) {
+    appendMessage(codeLog, 'error', 'Validation', 'Prompt cannot be empty.');
+    return;
+  }
+
+  state.codeBusy = true;
+  clearLog(codeLog);
+  setState(codeState, 'Working', 'loading');
+  syncBusyFlags();
+  appendMessage(codeLog, 'status', 'Status', 'Connected. Streaming live output...');
+
+  openStream({
+    pathname: '/code-editor',
+    params: {
+      file_path: file,
+      user_prompt: prompt,
+      mode: selectedMode,
+    },
+    logNode: codeLog,
+    pill: codeState,
+    busySetter: (busy) => {
+      state.codeBusy = busy;
+      syncBusyFlags();
+    },
+    onResult: (payload) => {
+      if (payload && payload.modified_files && Array.isArray(payload.modified_files)) {
+        appendMessage(
+          codeLog,
+          'result',
+          'Modified',
+          `Modified files: ${payload.modified_files.join(', ') || 'none'}`,
+        );
+      }
+    },
+  });
+});
+
+updateControlLock(false);
+syncBusyFlags();
+
